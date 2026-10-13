@@ -7,18 +7,39 @@
 # .project file (current dir or any parent), exports its key=value pairs as
 # PROJECT_<KEY> variables and renames the tmux window to PROJECT_NAME.
 #
-# Usage: install.sh [rcfile]     (default: ~/.bashrc)
+# It also adds an auto-attach block: an interactive SSH login opens the tmux
+# session "main" (as a grouped view) instead of a bare shell.
+#
+# Usage: install.sh [--session NAME] [--no-attach] [rcfile]   (default: ~/.bashrc)
 #        ssh HOST 'bash -s' < install.sh
-# Safe to re-run: the hook file is refreshed, the rc line is added once.
+#        ssh HOST 'bash -s -- --no-attach' < install.sh
+#   --session NAME  tmux session SSH logins attach to (default: main)
+#   --no-attach     leave out the auto-attach block, removing a managed one
+# Safe to re-run: the hook file and the auto-attach block are refreshed, the
+# source line is added once.
 set -euo pipefail
 
-VERSION=1.0.0
+VERSION=1.1.0
 
-RC=${1:-$HOME/.bashrc}
 HOOK=${PROJECT_HOOK_FILE:-$HOME/.config/bash/project-hook.sh}
 MARKER='# project-hook'
+ATTACH_BEGIN='# >>> tmuxTerminal auto-attach >>>'
+ATTACH_END='# <<< tmuxTerminal auto-attach <<<'
 
 die() { echo "error: $*" >&2; exit 1; }
+
+RC=$HOME/.bashrc
+SESSION=main
+ATTACH=1
+while (( $# )); do
+  case $1 in
+    --session)   SESSION=${2-}; shift 2 || die "--session needs a name" ;;
+    --no-attach) ATTACH=0; shift ;;
+    -*)          die "unknown option: $1" ;;
+    *)           RC=$1; shift ;;
+  esac
+done
+[[ $SESSION =~ ^[A-Za-z0-9_-]+$ ]] || die "session name must be letters, digits, _ or -"
 [[ -f $RC ]] || die "$RC not found"
 
 # --- 1. write the hook file -------------------------------------------------
@@ -88,26 +109,77 @@ chmod 644 "$tmp"
 mv "$tmp" "$HOOK"
 echo "hook $VERSION written: $HOOK"
 
-# --- 2. source it from the rc file (once) -----------------------------------
-if grep -qF "$MARKER" "$RC"; then
-  echo "already sourced from $RC — nothing to change"
-  exit 0
+# The rc edits are built up in $rctmp and written back in one go at the end.
+rctmp=$(mktemp "${RC}.XXXXXX")
+cp "$RC" "$rctmp"
+changes=()
+
+# --- 2. source the hook from the rc file (once) ------------------------------
+if ! grep -qF "$MARKER" "$rctmp"; then
+  line="[[ -f $(printf %q "$HOOK") ]] && source $(printf %q "$HOOK")  $MARKER"
+  if grep -q 'atuin init bash' "$rctmp"; then
+    # after atuin init, so bash-preexec's precmd_functions already exists
+    awk -v l="$line" '{print} /atuin init bash/ && !done {print l; done=1}' "$rctmp" >"$tmp"
+    changes+=("hook source line added after 'atuin init bash'")
+  else
+    { cat "$rctmp"; printf '\n%s\n' "$line"; } >"$tmp"
+    changes+=("hook source line added at end")
+  fi
+  cat "$tmp" >"$rctmp"
 fi
 
-line="[[ -f $(printf %q "$HOOK") ]] && source $(printf %q "$HOOK")  $MARKER"
-rctmp=$(mktemp "${RC}.XXXXXX")
-if grep -q 'atuin init bash' "$RC"; then
-  # after atuin init, so bash-preexec's precmd_functions already exists
-  awk -v l="$line" '{print} /atuin init bash/ && !done {print l; done=1}' "$RC" >"$rctmp"
-  where="after 'atuin init bash'"
-else
-  { cat "$RC"; printf '\n%s\n' "$line"; } >"$rctmp"
-  where="at end"
+# --- 3. SSH auto-attach block (managed, always last in the file) -------------
+# Drop any managed block, then re-append the current one. Last in the file so
+# the outer login shell has run all of the rc before it starts the tmux server.
+had_block=0
+grep -qF "$ATTACH_BEGIN" "$rctmp" && had_block=1
+if (( had_block )); then
+  # Remove the block and the blank lines it leaves at the end of the file, so
+  # re-appending it doesn't grow the gap on every run.
+  awk -v b="$ATTACH_BEGIN" -v e="$ATTACH_END" '
+    $0==b {skip=1} !skip {lines[++n]=$0} $0==e {skip=0}
+    END { while (n && lines[n] ~ /^[[:space:]]*$/) n--; for (i=1; i<=n; i++) print lines[i] }
+  ' "$rctmp" >"$tmp"
+  cat "$tmp" >"$rctmp"
+fi
+
+if (( ATTACH )); then
+  # Lines of the rc outside the managed block that already start tmux.
+  if grep -nE '^[^#]*tmux +(new-session|new|attach|a)\b' "$rctmp" >"$tmp"; then
+    echo "note: $RC already starts tmux outside the managed block:" >&2
+    sed 's/^/  line /' "$tmp" >&2
+    echo "      auto-attach not added; remove those lines and re-run to use it" >&2
+  else
+    cat >>"$rctmp" <<ATTACH_EOF
+
+$ATTACH_BEGIN
+# Managed by tmuxTerminal install.sh; re-run it to update, or with --no-attach
+# to remove. An interactive SSH login joins tmux session "$SESSION" as a grouped
+# view (shared windows, own current window), creating it if it doesn't exist,
+# so a missing session never closes the login. Detaching ends the SSH session.
+if [[ \$- == *i* && -n \${SSH_CONNECTION-} && -z \${TMUX-} ]] && command -v tmux >/dev/null; then
+    tmux new-session -t $SESSION 2>/dev/null || tmux new-session -s $SESSION && exit
+fi
+$ATTACH_END
+ATTACH_EOF
+    (( had_block )) || changes+=("SSH auto-attach block added (session \"$SESSION\")")
+  fi
+elif (( had_block )); then
+  changes+=("SSH auto-attach block removed")
+fi
+
+# --- 4. write the rc file back ------------------------------------------------
+if cmp -s "$RC" "$rctmp"; then
+  echo "$RC already up to date"
+  exit 0
 fi
 bash -n "$rctmp" || die "modified $RC failed syntax check — left unchanged"
 
 backup="$RC.bak.$(date +%Y%m%d-%H%M%S)"
 cp -p "$RC" "$backup"
 cat "$rctmp" >"$RC"                              # keep original inode/permissions
-echo "source line added to $RC ($where); backup: $backup"
+(( ${#changes[@]} )) || changes+=("SSH auto-attach block updated")
+echo "$RC:"
+printf '  %s\n' "${changes[@]}"
+echo "backup: $backup"
 echo "open a new shell (or: source $RC) to activate"
