@@ -19,7 +19,7 @@
 # source line is added once.
 set -euo pipefail
 
-VERSION=1.1.0
+VERSION=1.1.1
 
 HOOK=${PROJECT_HOOK_FILE:-$HOME/.config/bash/project-hook.sh}
 MARKER='# project-hook'
