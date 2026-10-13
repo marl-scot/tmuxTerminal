@@ -29,6 +29,50 @@ check "atuin rc: source line follows atuin init" "# project-hook" \
     "$(sed -n 3p "$WORK/rc-atuin" | grep -o '# project-hook')"
 check "hook file passes bash -n" 0 "$(bash -n "$PROJECT_HOOK_FILE"; echo $?)"
 
+# --- auto-attach block --------------------------------------------------------
+BEGIN='# >>> tmuxTerminal auto-attach >>>'
+check "attach block added once" 1 "$(grep -cF "$BEGIN" "$WORK/rc-plain")"
+check "attach block is last" "# <<< tmuxTerminal auto-attach <<<" "$(tail -1 "$WORK/rc-plain")"
+check "re-run leaves rc unchanged" "$WORK/rc-plain already up to date" \
+    "$("$ROOT/install.sh" "$WORK/rc-plain" | tail -1)"
+
+"$ROOT/install.sh" --session work "$WORK/rc-plain" >/dev/null
+check "--session replaces the block" "1 1" \
+    "$(grep -cF "$BEGIN" "$WORK/rc-plain") $(grep -c 'new-session -t work' "$WORK/rc-plain")"
+"$ROOT/install.sh" --no-attach "$WORK/rc-plain" >/dev/null
+check "--no-attach removes the block" 0 "$(grep -cF "$BEGIN" "$WORK/rc-plain")"
+check "--no-attach keeps the hook line" 1 "$(grep -c '# project-hook' "$WORK/rc-plain")"
+
+printf 'if true; then\n    tmux new-session -t main\n    exit\nfi\n' >"$WORK/rc-own"
+"$ROOT/install.sh" "$WORK/rc-own" >/dev/null 2>&1
+check "existing tmux start: block not added" 0 "$(grep -cF "$BEGIN" "$WORK/rc-own")"
+
+# Run the block in an interactive shell with a stub tmux that logs its calls.
+# STUB_JOIN=fail makes `new-session -t` fail, as when the session is missing.
+mkdir -p "$WORK/bin"
+cat >"$WORK/bin/tmux" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"$STUB_LOG"
+[[ $1 == new-session && $2 == -t && ${STUB_JOIN-} == fail ]] && exit 1
+exit 0
+STUB
+chmod +x "$WORK/bin/tmux"
+sed -n "/^$BEGIN\$/,\$p" "$WORK/rc-atuin" >"$WORK/rc-block"
+attach() {   # attach SSH_CONNECTION STUB_JOIN — prints tmux calls, then the shell's fate
+    : >"$WORK/stub.log"
+    env -i HOME="$HOME" PATH="$WORK/bin:/usr/bin:/bin" STUB_LOG="$WORK/stub.log" \
+        SSH_CONNECTION="$1" STUB_JOIN="$2" \
+        bash --rcfile "$WORK/rc-block" -i <<<'echo still-here' 2>/dev/null |
+        grep -o still-here || echo exited
+    tr '\n' ';' <"$WORK/stub.log"
+}
+check "ssh: joins session, exits on detach" "exited new-session -t main;" \
+    "$(attach '10.0.0.1 1 10.0.0.2 22' ok | tr '\n' ' ')"
+check "ssh: missing session is created" "exited new-session -t main;new-session -s main;" \
+    "$(attach '10.0.0.1 1 10.0.0.2 22' fail | tr '\n' ' ')"
+check "local login: tmux not started" "still-here " \
+    "$(attach '' ok | tr '\n' ' ')"
+
 # --- parser ------------------------------------------------------------------
 mkdir -p "$WORK/proj/sub" "$WORK/bare" "$WORK/unnamed"
 printf '# comment\n  name = my.app  \n  # indented comment\nvenv = ".venv"\nbad key = x\r\n' \

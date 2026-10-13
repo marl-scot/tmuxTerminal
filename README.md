@@ -9,6 +9,9 @@ project's name and exports every value in the file for other scripts to use.
 No more renaming tabs by hand, or forgetting to after moving to another
 project.
 
+The installer can also make SSH logins open straight into tmux; see
+[SSH auto-attach](#ssh-auto-attach).
+
 ## The `.project` file
 
 ```ini
@@ -65,6 +68,43 @@ set -g set-titles on
 set -g set-titles-string '#W'
 ```
 
+## SSH auto-attach
+
+By default the installer also adds this block to the **end** of the rc file:
+
+```bash
+# >>> tmuxTerminal auto-attach >>>
+if [[ $- == *i* && -n ${SSH_CONNECTION-} && -z ${TMUX-} ]] && command -v tmux >/dev/null; then
+    tmux new-session -t main 2>/dev/null || tmux new-session -s main && exit
+fi
+# <<< tmuxTerminal auto-attach <<<
+```
+
+An interactive SSH login then opens tmux instead of a bare shell:
+
+- `new-session -t main` joins the session (or session group) `main` as a
+  **grouped** session. It shares main's windows, but each login has its own
+  current window, so two terminals can look at different windows.
+- If `main` doesn't exist yet, it is created. Without this fallback a fresh
+  server would close every SSH login straight away.
+- Detaching (`prefix d`) ends the SSH session too.
+- Local logins, non-interactive SSH (`scp`, `ssh host cmd`) and shells already
+  inside tmux are left alone.
+
+The block goes last so the outer login shell has run all of the rc before it
+starts the tmux server, whose environment new windows inherit.
+
+Re-running the installer replaces the block, so it can be changed later:
+
+```bash
+./install.sh --session work  # attach to "work" instead of "main"
+./install.sh --no-attach     # leave the block out, removing an installed one
+```
+
+If the rc file already starts tmux outside the managed block, the installer
+doesn't add a second one. It prints the lines it found; delete them and re-run
+to switch to the managed block.
+
 ## Installation
 
 ```bash
@@ -72,17 +112,25 @@ set -g set-titles-string '#W'
 ./install.sh ~/.bashrc.local # into another rc file
 ```
 
+| Option | Effect |
+|---|---|
+| `--session NAME` | tmux session SSH logins attach to (default `main`) |
+| `--no-attach` | no SSH auto-attach block; removes a managed one |
+| `RCFILE` | rc file to change (default `~/.bashrc`) |
+
 On another server, without cloning:
 
 ```bash
 ssh HOST 'bash -s' < install.sh
+ssh HOST 'bash -s -- --no-attach' < install.sh   # with options
 # or, on the server itself
 curl -fsSL https://raw.githubusercontent.com/marl-scot/tmuxTerminal/main/install.sh | bash
 ```
 
 The installer is safe to re-run: it always rewrites the hook file (so
-re-running upgrades it) but adds the rc line only once. Before changing the rc
-file it syntax-checks the result and keeps a timestamped backup
+re-running upgrades it) and the auto-attach block, but adds the hook's source
+line only once. If nothing changed it leaves the rc file alone. Otherwise it
+syntax-checks the result first and keeps a timestamped backup
 (`~/.bashrc.bak.YYYYMMDD-HHMMSS`).
 
 Open a new shell, or `source ~/.bashrc`, to activate it.
@@ -94,7 +142,8 @@ Open a new shell, or `source ~/.bashrc`, to activate it.
 
 ### Uninstalling
 
-Delete the line ending in `# project-hook` from `~/.bashrc` and remove
+Run `./install.sh --no-attach` to remove the auto-attach block, then delete the
+line ending in `# project-hook` from `~/.bashrc` and remove
 `~/.config/bash/project-hook.sh`.
 
 ## Requirements
@@ -110,8 +159,9 @@ No other dependencies.
 tests/run.sh
 ```
 
-Runs the installer against throwaway rc files, checks the parser, and checks
-window renaming on a private tmux server socket. Nothing real is touched.
+Runs the installer against throwaway rc files, checks the parser, checks
+window renaming on a private tmux server socket, and runs the auto-attach
+block against a stub `tmux`. Nothing real is touched.
 
 ## Licence
 
