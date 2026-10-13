@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MIT License - Copyright (c) 2026 Matt Lowe / Marl Scot
+# MIT License - Copyright (c) 2026 Marl Scot
 #
 # tmuxTerminal install.sh — install the .project → tmux window name hook.
 #
@@ -19,7 +19,7 @@
 # source line is added once.
 set -euo pipefail
 
-VERSION=1.1.0
+VERSION=1.1.1
 
 HOOK=${PROJECT_HOOK_FILE:-$HOME/.config/bash/project-hook.sh}
 MARKER='# project-hook'
@@ -48,7 +48,7 @@ tmp=$(mktemp "${HOOK}.XXXXXX")
 trap 'rm -f "$tmp" "${rctmp-}"' EXIT
 { echo "# project-hook $VERSION — managed by tmuxTerminal install.sh; re-run it to update."
   cat <<'HOOK_EOF'
-# MIT License - Copyright (c) 2026 Matt Lowe / Marl Scot
+# MIT License - Copyright (c) 2026 Marl Scot
 #
 # .project format (comments and blank lines ignored, file is parsed not sourced):
 #   name = my-app          -> $PROJECT_NAME, also the tmux window name

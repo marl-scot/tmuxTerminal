@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MIT License - Copyright (c) 2026 Matt Lowe / Marl Scot
+# MIT License - Copyright (c) 2026 Marl Scot
 #
 # Tests for install.sh and the hook it writes. Everything runs in a temp dir
 # and on a private tmux server socket, so nothing real is touched.
