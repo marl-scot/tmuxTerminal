@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [1.1.2] - 2026-10-21
+
+### Changed
+
+- README lists the `.project` keys other tools read (`language`, `release`,
+  `dockerfile`, `image`, projectArchive's `archived*`).
+
 ## [1.1.1] - 2026-10-13
 
 ### Changed

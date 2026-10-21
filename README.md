@@ -34,6 +34,22 @@ deploy_host = dev.example.com
 - The file is **parsed, never sourced**, so a `.project` in a cloned repository
   cannot run code.
 
+### Keys other tools read
+
+The hook exports any key, so other tools keep their settings in the same file.
+They follow the parsing rules above (this hook is the reference):
+
+| Key | Read by | Meaning |
+|---|---|---|
+| `language` | the Claude standards detector, `setupCi` | which language standards apply: `python`, `rust`, `go`, `php`, `powershell`, `shell` |
+| `release` | `setupCi` | what a release builds: `rust`, `go`, `python`, `powershell`, `docker`, `none` |
+| `dockerfile`, `image` | `setupCi` | the Dockerfile to build and the registry image name |
+| `archived`, `archived_from`, `archived_reason`, `archived_host`, `unarchived` | projectArchive | where an archived project came from |
+
+Because `#` only starts a comment at the beginning of a line, a comment after a
+value becomes part of it: write `language = python`, not
+`language = python  # standards`.
+
 ## How it works
 
 `install.sh` writes the hook to `~/.config/bash/project-hook.sh` and adds one
