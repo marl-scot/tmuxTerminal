@@ -10,6 +10,7 @@ WORK=$(mktemp -d)
 SOCK=tmuxterminal-test-$$
 trap 'tmux -L "$SOCK" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
 export PROJECT_HOOK_FILE=$WORK/hook.sh PROJECT_HOOK_FORCE=1
+export TMUXTERMINAL_TMUX_CONF=$WORK/tmux.conf   # never touch the real config
 fails=0
 
 check() {   # check NAME EXPECTED ACTUAL
@@ -79,6 +80,56 @@ check "ssh: missing session is created" \
     "$(attach '10.0.0.1 1 10.0.0.2 22' fail | tr '\n' ' ')"
 check "local login: tmux not started" "still-here " \
     "$(attach '' ok | tr '\n' ' ')"
+
+# --- tmux config block ------------------------------------------------------------
+CB='# >>> tmuxTerminal >>>'
+printf 'echo x\n' >"$WORK/rc-conf"
+rm -f "$TMUXTERMINAL_TMUX_CONF"
+"$ROOT/install.sh" "$WORK/rc-conf" >/dev/null
+check "tmux.conf created with block" "$CB" "$(head -1 "$TMUXTERMINAL_TMUX_CONF")"
+check "block sets the title string" 1 "$(grep -c '^set -g set-titles-string "#S / #I:#W"$' "$TMUXTERMINAL_TMUX_CONF")"
+check "tmux accepts the block" 0 \
+    "$(tmux -L "$SOCK-conf" -f "$TMUXTERMINAL_TMUX_CONF" new-session -d 2>&1 | wc -l | tr -d ' '; tmux -L "$SOCK-conf" kill-server 2>/dev/null)"
+
+printf '\n# mine\nset -g history-limit 5000\n' >"$TMUXTERMINAL_TMUX_CONF"
+"$ROOT/install.sh" "$WORK/rc-conf" >/dev/null
+check "existing tmux.conf: block goes first" "$CB" "$(head -1 "$TMUXTERMINAL_TMUX_CONF")"
+check "existing tmux.conf: own lines kept, after a blank line" "|# mine|set -g history-limit 5000" \
+    "$(sed -n '/^# <<< tmuxTerminal <<<$/,$p' "$TMUXTERMINAL_TMUX_CONF" | tail -n +2 | tr '\n' '|' | sed 's/|$//')"
+cp "$TMUXTERMINAL_TMUX_CONF" "$WORK/conf-before"
+check "re-run: tmux.conf unchanged" "$TMUXTERMINAL_TMUX_CONF already up to date" \
+    "$("$ROOT/install.sh" "$WORK/rc-conf" | grep tmux.conf)"
+check "re-run: block once" 1 "$(grep -cF "$CB" "$TMUXTERMINAL_TMUX_CONF")"
+"$ROOT/install.sh" --no-tmux-conf "$WORK/rc-conf" >/dev/null
+check "--no-tmux-conf removes the block" "# mine|set -g history-limit 5000" \
+    "$(tr '\n' '|' <"$TMUXTERMINAL_TMUX_CONF" | sed 's/|$//')"
+rm -f "$TMUXTERMINAL_TMUX_CONF"
+"$ROOT/install.sh" --no-tmux-conf "$WORK/rc-conf" >/dev/null
+check "--no-tmux-conf, no file: none created" no "$([[ -e $TMUXTERMINAL_TMUX_CONF ]] && echo yes || echo no)"
+"$ROOT/install.sh" "$WORK/rc-conf" >/dev/null   # leave a config for later tests
+
+# --- tmux missing ------------------------------------------------------------------
+# A stub pkg-install logs its arguments and whether stdin is /dev/null.
+mkdir -p "$WORK/pkgbin"
+cat >"$WORK/pkgbin/pkg-install" <<'STUB'
+#!/usr/bin/env bash
+read -r -t 0.1 line && echo "stdin: $line" >>"$PKG_LOG"
+echo "pkg-install $*" >>"$PKG_LOG"
+exit "${PKG_STATUS:-0}"
+STUB
+chmod +x "$WORK/pkgbin/pkg-install"
+missing() {   # missing PATH STATUS [args]: run install.sh with tmux missing
+    local path=$1 status=$2; shift 2
+    : >"$WORK/pkg.log"
+    echo 'more script' | TMUXTERMINAL_TMUX=no-such-tmux PATH="$path" PKG_LOG="$WORK/pkg.log" \
+        PKG_STATUS=$status "$ROOT/install.sh" "$@" "$WORK/rc-conf" >/dev/null 2>"$WORK/pkg.err"
+    echo "$? $(tr '\n' ';' <"$WORK/pkg.log")"
+}
+check "no tmux: pkg-install asked, stdin not passed" "0 pkg-install tmux;" "$(missing "$WORK/pkgbin:$PATH" 0)"
+check "no tmux: --yes passed on" "0 pkg-install --yes tmux;" "$(missing "$WORK/pkgbin:$PATH" 0 --yes)"
+check "no tmux: declined stops the install" "1 pkg-install tmux;" "$(missing "$WORK/pkgbin:$PATH" 1)"
+check "no tmux, no pkg-install: error names pkgInstall" "1 1" \
+    "$(missing /usr/bin:/bin 0 | cut -c1) $(grep -c 'github.com/marl-scot/pkgInstall' "$WORK/pkg.err")"
 
 # --- parser ------------------------------------------------------------------
 mkdir -p "$WORK/proj/sub" "$WORK/bare" "$WORK/unnamed"

@@ -8,33 +8,46 @@
 # PROJECT_<KEY> variables and renames the tmux window to PROJECT_NAME.
 #
 # It also adds an auto-attach block: an interactive SSH login opens the tmux
-# session "main" (as a grouped view) instead of a bare shell.
+# session "main" (as a grouped view) instead of a bare shell, and a managed
+# block of settings to the tmux config (mouse, passthrough, terminal titles).
 #
-# Usage: install.sh [--session NAME] [--no-attach] [rcfile]   (default: ~/.bashrc)
-#        ssh HOST 'bash -s' < install.sh
+# tmux must be installed. If it isn't, pkg-install
+# (https://github.com/marl-scot/pkgInstall) is used to install it, asking first.
+#
+# Usage: install.sh [options] [rcfile]   (default rcfile: ~/.bashrc)
+#        ssh -t HOST 'bash -s' < install.sh       (-t so it can ask)
 #        ssh HOST 'bash -s -- --no-attach' < install.sh
 #   --session NAME  tmux session SSH logins attach to (default: main)
 #   --no-attach     leave out the auto-attach block, removing a managed one
-# Safe to re-run: the hook file and the auto-attach block are refreshed, the
+#   --no-tmux-conf  leave out the tmux config block, removing a managed one
+#   --yes           install tmux (if missing) without asking
+# Safe to re-run: the hook file and the managed blocks are refreshed, the
 # source line is added once.
 set -euo pipefail
 
-VERSION=1.1.3
+VERSION=1.1.4
 
 HOOK=${PROJECT_HOOK_FILE:-$HOME/.config/bash/project-hook.sh}
 MARKER='# project-hook'
 ATTACH_BEGIN='# >>> tmuxTerminal auto-attach >>>'
 ATTACH_END='# <<< tmuxTerminal auto-attach <<<'
+CONF_BEGIN='# >>> tmuxTerminal >>>'
+CONF_END='# <<< tmuxTerminal <<<'
+TMUX_CMD=${TMUXTERMINAL_TMUX:-tmux}     # override for tests
 
 die() { echo "error: $*" >&2; exit 1; }
 
 RC=$HOME/.bashrc
 SESSION=main
 ATTACH=1
+TMUX_CONF_BLOCK=1
+YES=0
 while (( $# )); do
   case $1 in
     --session)   SESSION=${2-}; shift 2 || die "--session needs a name" ;;
     --no-attach) ATTACH=0; shift ;;
+    --no-tmux-conf) TMUX_CONF_BLOCK=0; shift ;;
+    --yes)       YES=1; shift ;;
     -*)          die "unknown option: $1" ;;
     *)           RC=$1; shift ;;
   esac
@@ -42,10 +55,22 @@ done
 [[ $SESSION =~ ^[A-Za-z0-9_-]+$ ]] || die "session name must be letters, digits, _ or -"
 [[ -f $RC ]] || die "$RC not found"
 
+# --- 0. tmux must be installed --------------------------------------------------
+if ! command -v "$TMUX_CMD" >/dev/null 2>&1; then
+  command -v pkg-install >/dev/null 2>&1 || die "tmux isn't installed, and pkg-install isn't available to install it.
+  Install tmux, or install pkg-install (https://github.com/marl-scot/pkgInstall),
+  then re-run. For a remote host without either:
+    ssh -t HOST 'bash -s -- tmux' < pkg-install"
+  # </dev/null: piped over ssh, stdin is the rest of this script, and the
+  # package manager mustn't read it. pkg-install asks on /dev/tty.
+  yes_flag=(); (( YES )) && yes_flag=(--yes)
+  pkg-install "${yes_flag[@]}" tmux </dev/null || die "tmux is required and wasn't installed"
+fi
+
 # --- 1. write the hook file -------------------------------------------------
 mkdir -p "${HOOK%/*}"
 tmp=$(mktemp "${HOOK}.XXXXXX")
-trap 'rm -f "$tmp" "${rctmp-}"' EXIT
+trap 'rm -f "$tmp" "${rctmp-}" "${conftmp-}"' EXIT
 { echo "# project-hook $VERSION — managed by tmuxTerminal install.sh; re-run it to update."
   cat <<'HOOK_EOF'
 # MIT License - Copyright (c) 2026 Marl Scot
@@ -173,7 +198,65 @@ elif (( had_block )); then
   changes+=("SSH auto-attach block removed")
 fi
 
-# --- 4. write the rc file back ------------------------------------------------
+# --- 4. tmux config block (managed, first in the file) -------------------------
+# First, so the user's own settings further down override it. Written to the
+# config tmux reads: ~/.tmux.conf, else ~/.config/tmux/tmux.conf if that
+# exists, else a new ~/.tmux.conf.
+if [[ -n ${TMUXTERMINAL_TMUX_CONF-} ]]; then
+  TMUX_CONF=$TMUXTERMINAL_TMUX_CONF
+elif [[ ! -e $HOME/.tmux.conf && -e $HOME/.config/tmux/tmux.conf ]]; then
+  TMUX_CONF=$HOME/.config/tmux/tmux.conf
+else
+  TMUX_CONF=$HOME/.tmux.conf
+fi
+if (( TMUX_CONF_BLOCK )) || [[ -f $TMUX_CONF ]]; then
+  conftmp=$(mktemp "${TMUX_CONF}.XXXXXX")
+  {
+    if (( TMUX_CONF_BLOCK )); then
+      cat <<CONF_EOF
+$CONF_BEGIN
+# Managed by tmuxTerminal install.sh; re-run it to update, or with
+# --no-tmux-conf to remove. Settings after this block override it.
+set -g mouse on                 # scroll, select and resize with the mouse
+set -g allow-passthrough on     # let escape sequences reach the outer terminal
+set -g set-titles on            # outer terminal tab title: session / num:window
+set -g set-titles-string "#S / #I:#W"
+$CONF_END
+CONF_EOF
+    fi
+    # The rest of the file without any managed block, and without the blank
+    # lines a removed block leaves at the top.
+    if [[ -f $TMUX_CONF ]]; then
+      awk -v b="$CONF_BEGIN" -v e="$CONF_END" '
+        $0==b {skip=1; next} skip && $0==e {skip=0; next} skip {next}
+        !seen && /^[[:space:]]*$/ {next} {seen=1; print}
+      ' "$TMUX_CONF" | { (( TMUX_CONF_BLOCK )) && sed '1{/./s/^/\n/}' || cat; }
+    fi
+  } >"$conftmp"
+  if [[ -f $TMUX_CONF ]] && cmp -s "$TMUX_CONF" "$conftmp"; then
+    echo "$TMUX_CONF already up to date"
+  else
+    if [[ -f $TMUX_CONF ]]; then
+      confbackup="$TMUX_CONF.bak.$(date +%Y%m%d-%H%M%S)"
+      cp -p "$TMUX_CONF" "$confbackup"
+      cat "$conftmp" >"$TMUX_CONF"
+      if (( ! TMUX_CONF_BLOCK )); then action=removed
+      elif grep -qxF "$CONF_BEGIN" "$confbackup"; then action=updated
+      else action=added; fi
+      echo "$TMUX_CONF: tmux settings block $action (backup: $confbackup)"
+    else
+      mkdir -p "${TMUX_CONF%/*}"
+      cat "$conftmp" >"$TMUX_CONF"
+      echo "$TMUX_CONF: created with the tmux settings block"
+    fi
+    # Apply to a running server; not for a test or custom config path.
+    if [[ -z ${TMUXTERMINAL_TMUX_CONF-} ]] && "$TMUX_CMD" has-session 2>/dev/null; then
+      "$TMUX_CMD" source-file "$TMUX_CONF" && echo "  reloaded in the running tmux server"
+    fi
+  fi
+fi
+
+# --- 5. write the rc file back ------------------------------------------------
 if cmp -s "$RC" "$rctmp"; then
   echo "$RC already up to date"
   exit 0

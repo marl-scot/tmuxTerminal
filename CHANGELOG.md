@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [1.1.4] - 2026-11-05
+
+### Added
+
+- Managed tmux settings block at the top of `~/.tmux.conf` (or
+  `~/.config/tmux/tmux.conf`): `mouse on`, `allow-passthrough on`, and
+  `set-titles` with `"#S / #I:#W"` so the terminal tab shows session, window
+  number and name. The file is created if missing; your own lines are kept and
+  override the block. `--no-tmux-conf` removes it.
+- tmux check: if tmux isn't installed the installer runs `pkg-install tmux`
+  (marl-scot/pkgInstall), which asks first; `--yes` skips the question.
+  Without pkg-install it stops and says how to get it.
+
+### Changed
+
+- tmux is now required by the installer (the hook itself still works without
+  it).
+
 ## [1.1.3] - 2026-11-05
 
 ### Fixed

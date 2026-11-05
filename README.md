@@ -76,13 +76,30 @@ On each prompt the hook does nothing unless the directory changed. When it has:
 
 `#{@project_root}` can be used in tmux formats, e.g. the status line.
 
-To have your terminal emulator's own tab title follow the window name, add to
-`~/.tmux.conf`:
+## tmux settings
 
+The installer also puts a managed block of settings at the **top** of the tmux
+config, so your own settings further down the file override it:
+
+```tmux
+# >>> tmuxTerminal >>>
+set -g mouse on                 # scroll, select and resize with the mouse
+set -g allow-passthrough on     # let escape sequences reach the outer terminal
+set -g set-titles on            # outer terminal tab title: session / num:window
+set -g set-titles-string "#S / #I:#W"
+# <<< tmuxTerminal <<<
 ```
-set -g set-titles on
-set -g set-titles-string '#W'
-```
+
+`set-titles` makes your terminal emulator's tab title follow tmux, e.g.
+`main / 2:documentationServer`, so the project name from `.project` shows on
+the tab.
+
+- The config is `~/.tmux.conf`, or `~/.config/tmux/tmux.conf` if only that
+  exists. If neither does, `~/.tmux.conf` is created holding just the block.
+- The rest of the file is left as it is. A changed file gets a timestamped
+  backup (`~/.tmux.conf.bak.YYYYMMDD-HHMMSS`), and a running tmux server
+  reloads it.
+- `--no-tmux-conf` leaves the block out, removing an installed one.
 
 ## SSH auto-attach
 
@@ -141,12 +158,20 @@ to switch to the managed block.
 |---|---|
 | `--session NAME` | tmux session SSH logins attach to (default `main`) |
 | `--no-attach` | no SSH auto-attach block; removes a managed one |
+| `--no-tmux-conf` | no tmux settings block; removes a managed one |
+| `--yes` | install tmux, if it's missing, without asking |
 | `RCFILE` | rc file to change (default `~/.bashrc`) |
+
+tmux must be installed. If it isn't, the installer runs
+[pkg-install](https://github.com/marl-scot/pkgInstall) to install it with the
+system's package manager, asking first. If `pkg-install` isn't on `PATH` it stops
+and says how to get it; on a remote host without either, run
+`ssh -t HOST 'bash -s -- tmux' < pkg-install` first.
 
 On another server, without cloning:
 
 ```bash
-ssh HOST 'bash -s' < install.sh
+ssh -t HOST 'bash -s' < install.sh                 # -t so it can ask about tmux
 ssh HOST 'bash -s -- --no-attach' < install.sh   # with options
 # or, on the server itself
 curl -fsSL https://raw.githubusercontent.com/marl-scot/tmuxTerminal/main/install.sh | bash
@@ -164,17 +189,19 @@ Open a new shell, or `source ~/.bashrc`, to activate it.
 |---|---|
 | `PROJECT_HOOK_FILE` | where the hook is written (default `~/.config/bash/project-hook.sh`) |
 | `PROJECT_HOOK_FORCE=1` | load the hook in non-interactive shells too (used by the tests) |
+| `TMUXTERMINAL_TMUX_CONF` | tmux config to change instead of `~/.tmux.conf` (used by the tests; no reload) |
 
 ### Uninstalling
 
-Run `./install.sh --no-attach` to remove the auto-attach block, then delete the
+Run `./install.sh --no-attach --no-tmux-conf` to remove both managed blocks, then delete the
 line ending in `# project-hook` from `~/.bashrc` and remove
 `~/.config/bash/project-hook.sh`.
 
 ## Requirements
 
 - bash 4.0 or later
-- tmux, for the window renaming (the variables are exported without it)
+- tmux (the installer installs it via
+  [pkg-install](https://github.com/marl-scot/pkgInstall) if it's missing)
 
 No other dependencies.
 
