@@ -19,7 +19,7 @@
 # source line is added once.
 set -euo pipefail
 
-VERSION=1.1.2
+VERSION=1.1.3
 
 HOOK=${PROJECT_HOOK_FILE:-$HOME/.config/bash/project-hook.sh}
 MARKER='# project-hook'
@@ -154,11 +154,16 @@ if (( ATTACH )); then
 
 $ATTACH_BEGIN
 # Managed by tmuxTerminal install.sh; re-run it to update, or with --no-attach
-# to remove. An interactive SSH login joins tmux session "$SESSION" as a grouped
-# view (shared windows, own current window), creating it if it doesn't exist,
-# so a missing session never closes the login. Detaching ends the SSH session.
+# to remove. A detached base session "$SESSION" holds the windows; it is created
+# (joining any existing "$SESSION" group) if missing. An interactive SSH login
+# joins it as a grouped view (shared windows, own current window) that is
+# destroyed once no client is attached, so dropped connections don't leave
+# stale sessions behind. Detaching ends the SSH session.
 if [[ \$- == *i* && -n \${SSH_CONNECTION-} && -z \${TMUX-} ]] && command -v tmux >/dev/null; then
-    tmux new-session -t $SESSION 2>/dev/null || tmux new-session -s $SESSION && exit
+    tmux has-session -t "=$SESSION" 2>/dev/null ||
+        tmux new-session -d -t $SESSION -s $SESSION 2>/dev/null ||
+        tmux new-session -d -s $SESSION
+    tmux new-session -t $SESSION \\; set-option destroy-unattached on && exit
 fi
 $ATTACH_END
 ATTACH_EOF

@@ -48,12 +48,14 @@ printf 'if true; then\n    tmux new-session -t main\n    exit\nfi\n' >"$WORK/rc-
 check "existing tmux start: block not added" 0 "$(grep -cF "$BEGIN" "$WORK/rc-own")"
 
 # Run the block in an interactive shell with a stub tmux that logs its calls.
-# STUB_JOIN=fail makes `new-session -t` fail, as when the session is missing.
+# STUB_JOIN=group: no base session but its group exists (has-session fails).
+# STUB_JOIN=fail: neither exists (has-session and joining the group both fail).
 mkdir -p "$WORK/bin"
 cat >"$WORK/bin/tmux" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >>"$STUB_LOG"
-[[ $1 == new-session && $2 == -t && ${STUB_JOIN-} == fail ]] && exit 1
+[[ $1 == has-session && ${STUB_JOIN-} != ok ]] && exit 1
+[[ "$*" == "new-session -d -t "* && ${STUB_JOIN-} == fail ]] && exit 1
 exit 0
 STUB
 chmod +x "$WORK/bin/tmux"
@@ -66,9 +68,14 @@ attach() {   # attach SSH_CONNECTION STUB_JOIN — prints tmux calls, then the s
         grep -o still-here || echo exited
     tr '\n' ';' <"$WORK/stub.log"
 }
-check "ssh: joins session, exits on detach" "exited new-session -t main;" \
+JOIN='new-session -t main ; set-option destroy-unattached on;'
+check "ssh: joins session, exits on detach" "exited has-session -t =main;$JOIN" \
     "$(attach '10.0.0.1 1 10.0.0.2 22' ok | tr '\n' ' ')"
-check "ssh: missing session is created" "exited new-session -t main;new-session -s main;" \
+check "ssh: base session added to existing group" \
+    "exited has-session -t =main;new-session -d -t main -s main;$JOIN" \
+    "$(attach '10.0.0.1 1 10.0.0.2 22' group | tr '\n' ' ')"
+check "ssh: missing session is created" \
+    "exited has-session -t =main;new-session -d -t main -s main;new-session -d -s main;$JOIN" \
     "$(attach '10.0.0.1 1 10.0.0.2 22' fail | tr '\n' ' ')"
 check "local login: tmux not started" "still-here " \
     "$(attach '' ok | tr '\n' ' ')"

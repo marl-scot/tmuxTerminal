@@ -91,18 +91,27 @@ By default the installer also adds this block to the **end** of the rc file:
 ```bash
 # >>> tmuxTerminal auto-attach >>>
 if [[ $- == *i* && -n ${SSH_CONNECTION-} && -z ${TMUX-} ]] && command -v tmux >/dev/null; then
-    tmux new-session -t main 2>/dev/null || tmux new-session -s main && exit
+    tmux has-session -t "=main" 2>/dev/null ||
+        tmux new-session -d -t main -s main 2>/dev/null ||
+        tmux new-session -d -s main
+    tmux new-session -t main \; set-option destroy-unattached on && exit
 fi
 # <<< tmuxTerminal auto-attach <<<
 ```
 
 An interactive SSH login then opens tmux instead of a bare shell:
 
-- `new-session -t main` joins the session (or session group) `main` as a
-  **grouped** session. It shares main's windows, but each login has its own
-  current window, so two terminals can look at different windows.
-- If `main` doesn't exist yet, it is created. Without this fallback a fresh
-  server would close every SSH login straight away.
+- A detached **base** session `main` holds the windows. If it is missing it is
+  created, joining an existing `main` session group if there is one so the
+  windows carry over.
+- `new-session -t main` then joins it as a **grouped** session. It shares
+  main's windows, but each login has its own current window, so two terminals
+  can look at different windows.
+- Each login's session has `destroy-unattached on`, so it is removed as soon as
+  its client goes, whether you detach or the connection drops. Without this,
+  every dropped SSH connection left a stale `main-N` session behind. The base
+  session is never attached, so it (and your windows) stays. `tmux ls`
+  therefore always shows a detached `main`; that is expected.
 - Detaching (`prefix d`) ends the SSH session too.
 - Local logins, non-interactive SSH (`scp`, `ssh host cmd`) and shells already
   inside tmux are left alone.

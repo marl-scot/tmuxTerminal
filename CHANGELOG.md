@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [1.1.3] - 2026-11-05
+
+### Fixed
+
+- SSH auto-attach no longer leaves a stale `main-N` session behind for every
+  dropped connection. A detached base session now holds the windows and each
+  login's grouped session sets `destroy-unattached on`, so it is removed when
+  its client goes. Works on tmux 3.3 (no `keep-group` needed). Re-run the
+  installer to update the block.
+
 ## [1.1.2] - 2026-10-21
 
 ### Changed
